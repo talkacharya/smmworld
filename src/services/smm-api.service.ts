@@ -164,7 +164,7 @@ class SMMApiService {
 }
 
 // Default API instance using the provided key
-const defaultApiKey = '12b44d5d25f3303425079e826fa9e264'
+const defaultApiKey = '8e18b912954bdc13dcb9e722e85c123f'
 export const smmApi = new SMMApiService(defaultApiKey)
 
 // Export the class for custom API key usage
