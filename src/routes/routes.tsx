@@ -17,6 +17,7 @@ const LoginPage = lazy(() => import('@/pages/auth/LoginPage'))
 const SignupPage = lazy(() => import('@/pages/auth/SignupPage'))
 const ForgotPasswordPage = lazy(() => import('@/pages/auth/ForgotPasswordPage'))
 const ResetPasswordPage = lazy(() => import('@/pages/auth/ResetPasswordPage'))
+const AuthCallbackPage = lazy(() => import('@/pages/auth/AuthCallbackPage'))
 
 // Dashboard pages
 const DashboardPage = lazy(() => import('@/pages/dashboard/DashboardPage'))
@@ -56,6 +57,10 @@ export const router = createBrowserRouter([
         element: withSuspense(ApiDocsPage),
       },
     ],
+  },
+  {
+    path: 'auth/callback',
+    element: withSuspense(AuthCallbackPage),
   },
   {
     path: 'app',
