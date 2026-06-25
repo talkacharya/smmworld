@@ -1,5 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
+import { startSyncJob, stopSyncJob } from "./jobs/syncOrders";
 
 const rawPort = process.env["PORT"];
 
@@ -22,4 +23,20 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Start background jobs
+  startSyncJob();
+});
+
+// Graceful shutdown
+process.on("SIGTERM", () => {
+  logger.info("SIGTERM received, stopping background jobs");
+  stopSyncJob();
+  process.exit(0);
+});
+
+process.on("SIGINT", () => {
+  logger.info("SIGINT received, stopping background jobs");
+  stopSyncJob();
+  process.exit(0);
 });
