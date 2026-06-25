@@ -4,9 +4,10 @@
  * Flow per order:
  *  1. Fetch status from provider
  *  2. Update order row in Supabase
- *  3. On `partial`  → refund the unfulfilled portion to user wallet
- *  4. On `cancelled`→ full refund (if not already refunded)
- *  5. Terminal statuses (completed/partial/cancelled) → set completed_at
+ *  3. On `partial`  → refund the unfulfilled portion + send notification
+ *  4. On `cancelled`→ full refund (if not already refunded) + send notification
+ *  5. On `completed`→ send success notification
+ *  6. Terminal statuses (completed/partial/cancelled) → set completed_at
  */
 
 import { supabaseAdmin } from "../lib/supabaseAdmin";
@@ -23,7 +24,7 @@ const TERMINAL_STATUSES = ["completed", "partial", "cancelled", "refunded"];
 let isRunning = false;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
@@ -36,7 +37,29 @@ type OrderRow = {
   status: string;
   price_usd: number;
   quantity: number;
+  service_name: string;
 };
+
+type NotificationType = "info" | "warning" | "success" | "error";
+
+async function sendNotification(
+  userId: string,
+  title: string,
+  message: string,
+  type: NotificationType,
+  actionUrl?: string
+) {
+  const { error } = await supabaseAdmin.from("notifications").insert({
+    user_id: userId,
+    title,
+    message,
+    type,
+    action_url: actionUrl ?? null,
+  });
+  if (error) {
+    logger.warn({ error, userId }, "Failed to insert notification");
+  }
+}
 
 /** Issue a partial refund for the unfulfilled portion of an order. */
 async function issuePartialRefund(order: OrderRow, remainsStr: string) {
@@ -45,7 +68,7 @@ async function issuePartialRefund(order: OrderRow, remainsStr: string) {
 
   const refundFraction = remains / order.quantity;
   const refundUSD = order.price_usd * refundFraction;
-  if (refundUSD < 0.0001) return; // not worth it
+  if (refundUSD < 0.0001) return;
 
   const { data: wallet } = await supabaseAdmin
     .from("wallets")
@@ -82,7 +105,6 @@ async function issuePartialRefund(order: OrderRow, remainsStr: string) {
 async function issueFullRefund(order: OrderRow) {
   if (!order.price_usd || order.price_usd <= 0) return;
 
-  // Check if a refund transaction already exists for this order
   const { data: existing } = await supabaseAdmin
     .from("wallet_transactions")
     .select("id")
@@ -129,7 +151,6 @@ async function syncOrder(order: OrderRow): Promise<"updated" | "unchanged" | "er
     const status = await fetchOrderStatus(order.external_order_id);
     const providerStatus = status.status?.toLowerCase() ?? "";
 
-    // Map provider status to our internal status
     const statusMap: Record<string, string> = {
       pending: "pending",
       processing: "processing",
@@ -158,11 +179,44 @@ async function syncOrder(order: OrderRow): Promise<"updated" | "unchanged" | "er
 
     await supabaseAdmin.from("orders").update(updates).eq("id", order.id);
 
-    // Handle refunds for terminal states
-    if (newStatus === "partial" && status.remains) {
+    const orderUrl = `/orders`;
+
+    if (newStatus === "completed") {
+      await sendNotification(
+        order.user_id,
+        "Order Completed ✓",
+        `Your order for "${order.service_name}" has been completed successfully.`,
+        "success",
+        orderUrl
+      );
+    } else if (newStatus === "partial" && status.remains) {
       await issuePartialRefund(order, status.remains);
+      const remains = parseInt(status.remains, 10);
+      const fulfilled = order.quantity - remains;
+      await sendNotification(
+        order.user_id,
+        "Order Partially Completed",
+        `Your order for "${order.service_name}" was partially fulfilled (${fulfilled}/${order.quantity} units). The unfulfilled portion has been refunded.`,
+        "warning",
+        orderUrl
+      );
     } else if (newStatus === "cancelled") {
       await issueFullRefund(order);
+      await sendNotification(
+        order.user_id,
+        "Order Cancelled",
+        `Your order for "${order.service_name}" was cancelled by the provider. Your full payment has been refunded.`,
+        "error",
+        orderUrl
+      );
+    } else if (newStatus === "in_progress" && order.status !== "in_progress") {
+      await sendNotification(
+        order.user_id,
+        "Order In Progress",
+        `Your order for "${order.service_name}" is now being processed.`,
+        "info",
+        orderUrl
+      );
     }
 
     logger.info(
@@ -192,14 +246,13 @@ async function runSyncJob() {
   const stats = { total: 0, updated: 0, unchanged: 0, errors: 0 };
 
   try {
-    // Fetch all active orders that have a provider ID
     const { data: orders, error } = await supabaseAdmin
       .from("orders")
-      .select("id, user_id, external_order_id, status, price_usd, quantity")
+      .select("id, user_id, external_order_id, status, price_usd, quantity, service_name")
       .in("status", ACTIVE_STATUSES)
       .not("external_order_id", "is", null)
-      .order("updated_at", { ascending: true }) // oldest first
-      .limit(200); // cap to avoid runaway batches
+      .order("updated_at", { ascending: true })
+      .limit(200);
 
     if (error) {
       logger.error({ error }, "Sync job: failed to fetch active orders");
@@ -214,7 +267,6 @@ async function runSyncJob() {
     stats.total = orders.length;
     logger.info({ count: orders.length }, "Sync job: starting order sync");
 
-    // Process in batches with a short pause between them
     for (let i = 0; i < orders.length; i += BATCH_SIZE) {
       const batch = orders.slice(i, i + BATCH_SIZE) as OrderRow[];
 
@@ -225,17 +277,13 @@ async function runSyncJob() {
         else stats.errors++;
       });
 
-      // Pause between batches to avoid rate-limiting the provider
       if (i + BATCH_SIZE < orders.length) {
         await sleep(BATCH_DELAY_MS);
       }
     }
 
     const elapsed = Date.now() - startedAt;
-    logger.info(
-      { ...stats, elapsedMs: elapsed },
-      "Sync job: completed"
-    );
+    logger.info({ ...stats, elapsedMs: elapsed }, "Sync job: completed");
   } catch (err) {
     logger.error({ err }, "Sync job: unexpected error");
   } finally {
@@ -246,17 +294,11 @@ async function runSyncJob() {
 // ── lifecycle ─────────────────────────────────────────────────────────────────
 
 export function startSyncJob() {
-  if (intervalHandle) return; // already started
+  if (intervalHandle) return;
 
-  logger.info(
-    { intervalMs: SYNC_INTERVAL_MS },
-    "Order sync job started"
-  );
+  logger.info({ intervalMs: SYNC_INTERVAL_MS }, "Order sync job started");
 
-  // Run once immediately (with a short delay so the server finishes starting up)
   setTimeout(runSyncJob, 10_000);
-
-  // Then every SYNC_INTERVAL_MS
   intervalHandle = setInterval(runSyncJob, SYNC_INTERVAL_MS);
 }
 
