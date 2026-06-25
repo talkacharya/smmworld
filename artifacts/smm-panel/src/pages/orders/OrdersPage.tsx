@@ -17,6 +17,7 @@ import { getServices, categorizeServices, type SMMService } from '@/services/smm
 import { createOrder, getUserOrders, syncOrderStatus, getOrderStats, cancelOrder } from '@/services/orders.service'
 import { getWallet } from '@/services/wallet.service'
 import { formatCurrencyByCode, type CurrencyCode } from '@/lib/currency'
+import { useCurrency } from '@/contexts/CurrencyContext'
 import { formatRelativeTime } from '@/lib/formatters'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -74,7 +75,7 @@ export default function OrdersPage() {
   const [orderQuantity, setOrderQuantity] = useState('')
   const [orderPage, setOrderPage] = useState(1)
 
-  const currency = 'USD'
+  const { formatPrice, convertFromUSD, currency } = useCurrency()
 
   const { data: services, isLoading: servicesLoading } = useQuery({
     queryKey: ['smm-services'],
@@ -298,7 +299,7 @@ export default function OrdersPage() {
                       </div>
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>${parseFloat(service.rate).toFixed(4)}/1K</span>
+                      <span>{formatPrice(parseFloat(service.rate), 4)}/1K</span>
                       <span>{parseInt(service.min).toLocaleString()} – {parseInt(service.max).toLocaleString()}</span>
                     </div>
                   </div>
@@ -461,7 +462,7 @@ export default function OrdersPage() {
               <div className="flex justify-between mb-2">
                 <span className="text-sm text-muted-foreground">Rate per 1,000:</span>
                 <span className="font-medium">
-                  ${selectedService ? parseFloat(selectedService.rate).toFixed(4) : '0.0000'}
+                  {selectedService ? formatPrice(parseFloat(selectedService.rate), 4) : formatPrice(0, 4)}
                 </span>
               </div>
               <div className="flex justify-between mb-2">
@@ -474,7 +475,7 @@ export default function OrdersPage() {
               <div className="flex justify-between">
                 <span className="font-medium">Total:</span>
                 <span className="font-bold text-emerald-500">
-                  ${calculatePriceUsd().toFixed(4)}
+                  {formatPrice(calculatePriceUsd(), 4)}
                 </span>
               </div>
             </div>

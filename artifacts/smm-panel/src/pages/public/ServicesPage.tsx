@@ -15,6 +15,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Link } from 'react-router-dom'
+import { useCurrency } from '@/contexts/CurrencyContext'
 
 const platformIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   instagram: Instagram,
@@ -64,6 +65,7 @@ export default function ServicesPage() {
     fetchServices()
   }, [])
 
+  const { formatPrice } = useCurrency()
   const categorizedServices = useMemo(() => categorizeServices(services), [services])
 
   const categories = useMemo(() => {
@@ -120,7 +122,13 @@ export default function ServicesPage() {
               <div className="text-sm text-muted-foreground">Platforms</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-emerald-500">$0.01</div>
+              <div className="text-3xl font-bold text-emerald-500">
+                {formatPrice(
+                  services.length > 0
+                    ? Math.min(...services.map((s) => parseFloat(s.rate)).filter((r) => r > 0))
+                    : 0.001
+                )}
+              </div>
               <div className="text-sm text-muted-foreground">Starting Price</div>
             </div>
           </div>
@@ -242,7 +250,7 @@ export default function ServicesPage() {
                               ID: {service.service}
                             </Badge>
                             <div className="text-right">
-                              <div className="font-bold text-foreground">${rate.toFixed(4)}</div>
+                              <div className="font-bold text-foreground">{formatPrice(rate, 4)}</div>
                               <div className="text-xs text-muted-foreground">per 1000</div>
                             </div>
                           </div>
