@@ -16,6 +16,9 @@ export const ROUTES = {
   FORGOT_PASSWORD: '/forgot-password',
   RESET_PASSWORD: '/reset-password',
   VERIFY_EMAIL: '/verify-email',
+  ADMIN: '/admin',
+  ADMIN_ORDERS: '/admin/orders',
+  ADMIN_USERS: '/admin/users',
 } as const
 
 export const QUERY_KEYS = {
