@@ -1,14 +1,12 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import {
   Package,
   Search,
   Filter,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ExternalLink,
   RefreshCw,
   X,
   ShoppingCart,
@@ -18,9 +16,8 @@ import { useAuth } from '@/hooks/useAuth'
 import { getServices, categorizeServices, type SMMService } from '@/services/smm-api.service'
 import { createOrder, getUserOrders, syncOrderStatus, getOrderStats, cancelOrder } from '@/services/orders.service'
 import { getWallet } from '@/services/wallet.service'
-import { getExchangeRates, convertCurrencySync } from '@/services/exchange-rate.service'
 import { formatCurrencyByCode, type CurrencyCode } from '@/lib/currency'
-import { formatRelativeTime, formatDateTime } from '@/lib/formatters'
+import { formatRelativeTime } from '@/lib/formatters'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -54,10 +51,7 @@ import type { Order } from '@/types/database'
 
 const container = {
   hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: { staggerChildren: 0.05 },
-  },
+  show: { opacity: 1, transition: { staggerChildren: 0.05 } },
 }
 
 const item = {
@@ -65,8 +59,12 @@ const item = {
   show: { opacity: 1, y: 0 },
 }
 
+function Separator({ className }: { className?: string }) {
+  return <div className={`h-px bg-border ${className || ''}`} />
+}
+
 export default function OrdersPage() {
-  const { user, profile } = useAuth()
+  const { user } = useAuth()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
@@ -76,74 +74,58 @@ export default function OrdersPage() {
   const [orderQuantity, setOrderQuantity] = useState('')
   const [orderPage, setOrderPage] = useState(1)
 
-  // Get user's preferred currency
   const currency = 'USD'
 
-  // Fetch services
   const { data: services, isLoading: servicesLoading } = useQuery({
     queryKey: ['smm-services'],
-    queryFn: () => getServices(),
+    queryFn: getServices,
+    staleTime: 5 * 60 * 1000,
   })
 
-  // Fetch orders
   const { data: ordersData, isLoading: ordersLoading } = useQuery({
     queryKey: ['orders', orderPage],
     queryFn: () => getUserOrders(user!.id, orderPage, 10),
     enabled: !!user?.id,
   })
 
-  // Fetch order stats
   const { data: orderStats } = useQuery({
     queryKey: ['order-stats'],
     queryFn: () => getOrderStats(user!.id),
     enabled: !!user?.id,
   })
 
-  // Fetch wallet
   const { data: wallet } = useQuery({
     queryKey: ['wallet'],
     queryFn: () => getWallet(user!.id),
     enabled: !!user?.id,
   })
 
-  // Fetch exchange rates
-  const { data: rates = {} } = useQuery({
-    queryKey: ['exchange-rates'],
-    queryFn: getExchangeRates,
-  })
-
-  // Categorize services
   const categorizedServices = useMemo(() => {
     if (!services) return new Map()
     return categorizeServices(services)
   }, [services])
 
-  const categories = useMemo(() => {
-    return Array.from(categorizedServices.keys())
-  }, [categorizedServices])
+  const categories = useMemo(() => Array.from(categorizedServices.keys()), [categorizedServices])
 
-  // Filter services
   const filteredServices = useMemo(() => {
     if (!services) return []
     let filtered = services
-
-    if (selectedCategory !== 'all') {
-      filtered = categorizedServices.get(selectedCategory) || []
-    }
-
+    if (selectedCategory !== 'all') filtered = categorizedServices.get(selectedCategory) || []
     if (search) {
-      const searchLower = search.toLowerCase()
+      const q = search.toLowerCase()
       filtered = filtered.filter(
-        (s) =>
-          s.name.toLowerCase().includes(searchLower) ||
-          s.service.toString().includes(searchLower)
+        (s) => s.name.toLowerCase().includes(q) || s.service.toString().includes(q)
       )
     }
-
     return filtered
   }, [services, selectedCategory, search, categorizedServices])
 
-  // Create order mutation
+  const calculatePriceUsd = (): number => {
+    if (!selectedService || !orderQuantity) return 0
+    const qty = parseInt(orderQuantity) || 0
+    return (parseFloat(selectedService.rate) * qty) / 1000
+  }
+
   const createOrderMutation = useMutation({
     mutationFn: async () => {
       if (!selectedService || !orderLink || !orderQuantity) {
@@ -154,28 +136,34 @@ export default function OrdersPage() {
       const min = parseInt(selectedService.min)
       const max = parseInt(selectedService.max)
 
-      if (quantity < min || quantity > max) {
-        throw new Error(`Quantity must be between ${min} and ${max}`)
+      if (isNaN(quantity) || quantity < min || quantity > max) {
+        throw new Error(`Quantity must be between ${min.toLocaleString()} and ${max.toLocaleString()}`)
       }
 
-      const price = (parseFloat(selectedService.rate) * quantity) / 1000
+      const priceUsd = calculatePriceUsd()
 
-      // Check balance
-      if (wallet && wallet.balance < price) {
+      if (wallet && wallet.balance < priceUsd) {
         throw new Error('Insufficient balance. Please add funds to your wallet.')
       }
 
-      return createOrder(user!.id, {
-        serviceId: selectedService.service,
-        serviceName: selectedService.name,
-        platform: selectedCategory !== 'all' ? selectedCategory : 'unknown',
-        link: orderLink,
-        quantity,
-        price,
-        currency: 'USD',
-      }, currency)
+      return createOrder(
+        user!.id,
+        {
+          serviceId: selectedService.service,
+          serviceName: selectedService.name,
+          platform: selectedCategory !== 'all' ? selectedCategory : 'other',
+          link: orderLink,
+          quantity,
+          priceUsd,
+        },
+        currency
+      )
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(result.error || 'Order failed')
+        return
+      }
       toast.success('Order placed successfully!')
       setOrderDialogOpen(false)
       setOrderLink('')
@@ -190,36 +178,30 @@ export default function OrdersPage() {
     },
   })
 
-  // Sync order status mutation
   const syncOrderMutation = useMutation({
     mutationFn: syncOrderStatus,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] })
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['orders'] }),
   })
 
-  // Cancel order mutation
   const cancelOrderMutation = useMutation({
     mutationFn: (orderId: string) => cancelOrder(orderId, user!.id),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (!result.success) {
+        toast.error(result.error || 'Cancel failed')
+        return
+      }
       toast.success('Order cancelled and refunded')
       queryClient.invalidateQueries({ queryKey: ['orders'] })
       queryClient.invalidateQueries({ queryKey: ['wallet'] })
       queryClient.invalidateQueries({ queryKey: ['order-stats'] })
     },
-    onError: (error: Error) => {
-      toast.error(error.message)
-    },
+    onError: (error: Error) => toast.error(error.message),
   })
 
   const handlePlaceOrder = (service: SMMService) => {
     setSelectedService(service)
     setOrderQuantity(service.min)
     setOrderDialogOpen(true)
-  }
-
-  const handleSubmitOrder = () => {
-    createOrderMutation.mutateAsync().catch(() => {})
   }
 
   const getStatusColor = (status: Order['status']) => {
@@ -235,20 +217,8 @@ export default function OrdersPage() {
     return colors[status] || 'bg-gray-500/10 text-gray-500 border-gray-500/20'
   }
 
-  const calculatePrice = () => {
-    if (!selectedService || !orderQuantity) return '0.00'
-    const quantity = parseInt(orderQuantity) || 0
-    const price = (parseFloat(selectedService.rate) * quantity) / 1000
-    return formatCurrencyByCode(price, currency as CurrencyCode)
-  }
-
   return (
-    <motion.div
-      variants={container}
-      initial="hidden"
-      animate="show"
-      className="space-y-6"
-    >
+    <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
       <motion.div variants={item}>
         <h1 className="text-3xl font-bold text-foreground">Orders</h1>
         <p className="text-muted-foreground">Place and track your social media orders</p>
@@ -280,12 +250,9 @@ export default function OrdersPage() {
               <ShoppingCart className="h-5 w-5" />
               New Order
             </CardTitle>
-            <CardDescription>
-              Select a service, enter your link, and place your order
-            </CardDescription>
+            <CardDescription>Select a service, enter your link, and place your order</CardDescription>
           </CardHeader>
           <CardContent>
-            {/* Filters */}
             <div className="flex flex-col sm:flex-row gap-4 mb-6">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -304,15 +271,12 @@ export default function OrdersPage() {
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
                   {categories.map((cat) => (
-                    <SelectItem key={cat} value={cat} className="capitalize">
-                      {cat}
-                    </SelectItem>
+                    <SelectItem key={cat} value={cat} className="capitalize">{cat}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
-            {/* Services Grid */}
             {servicesLoading ? (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -335,7 +299,7 @@ export default function OrdersPage() {
                     </div>
                     <div className="flex items-center justify-between text-xs text-muted-foreground">
                       <span>${parseFloat(service.rate).toFixed(4)}/1K</span>
-                      <span>{parseInt(service.min).toLocaleString()} - {parseInt(service.max).toLocaleString()}</span>
+                      <span>{parseInt(service.min).toLocaleString()} – {parseInt(service.max).toLocaleString()}</span>
                     </div>
                   </div>
                 ))}
@@ -373,7 +337,7 @@ export default function OrdersPage() {
                       <TableRow>
                         <TableHead>ID</TableHead>
                         <TableHead>Service</TableHead>
-                        <TableHead>Quantity</TableHead>
+                        <TableHead>Qty</TableHead>
                         <TableHead>Price</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead>Date</TableHead>
@@ -387,9 +351,7 @@ export default function OrdersPage() {
                             {order.external_order_id || order.id.slice(0, 8)}
                           </TableCell>
                           <TableCell>
-                            <div className="max-w-[200px] truncate text-sm">
-                              {order.service_name}
-                            </div>
+                            <div className="max-w-[200px] truncate text-sm">{order.service_name}</div>
                           </TableCell>
                           <TableCell>{order.quantity.toLocaleString()}</TableCell>
                           <TableCell>
@@ -420,7 +382,7 @@ export default function OrdersPage() {
                                   size="icon"
                                   className="h-8 w-8 text-red-500 hover:text-red-600"
                                   onClick={() => {
-                                    if (confirm('Are you sure you want to cancel this order?')) {
+                                    if (confirm('Cancel this order?')) {
                                       cancelOrderMutation.mutate(order.id)
                                     }
                                   }}
@@ -439,23 +401,13 @@ export default function OrdersPage() {
 
                 <div className="flex items-center justify-between mt-4">
                   <div className="text-sm text-muted-foreground">
-                    Showing {(orderPage - 1) * 10 + 1} to {Math.min(orderPage * 10, ordersData.total)} of {ordersData.total}
+                    Showing {(orderPage - 1) * 10 + 1}–{Math.min(orderPage * 10, ordersData.total)} of {ordersData.total}
                   </div>
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={orderPage === 1}
-                      onClick={() => setOrderPage(orderPage - 1)}
-                    >
+                    <Button variant="outline" size="sm" disabled={orderPage === 1} onClick={() => setOrderPage(orderPage - 1)}>
                       <ChevronLeft className="h-4 w-4" />
                     </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={!ordersData.hasMore}
-                      onClick={() => setOrderPage(orderPage + 1)}
-                    >
+                    <Button variant="outline" size="sm" disabled={!ordersData.hasMore} onClick={() => setOrderPage(orderPage + 1)}>
                       <ChevronRight className="h-4 w-4" />
                     </Button>
                   </div>
@@ -476,16 +428,14 @@ export default function OrdersPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Place Order</DialogTitle>
-            <DialogDescription>
-              {selectedService?.name}
-            </DialogDescription>
+            <DialogDescription>{selectedService?.name}</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Link</label>
               <Input
-                placeholder="https://instagram.com/username or post URL"
+                placeholder="https://instagram.com/username"
                 value={orderLink}
                 onChange={(e) => setOrderLink(e.target.value)}
               />
@@ -501,42 +451,44 @@ export default function OrdersPage() {
                 onChange={(e) => setOrderQuantity(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Min: {selectedService?.min ? parseInt(selectedService.min).toLocaleString() : 0}
-                {' '} | Max: {selectedService?.max ? parseInt(selectedService.max).toLocaleString() : 0}
+                Min: {selectedService ? parseInt(selectedService.min).toLocaleString() : 0}
+                {' | '}
+                Max: {selectedService ? parseInt(selectedService.max).toLocaleString() : 0}
               </p>
             </div>
 
             <div className="p-4 rounded-lg bg-muted">
               <div className="flex justify-between mb-2">
-                <span className="text-sm text-muted-foreground">Price per 1000:</span>
-                <span className="font-medium">${selectedService ? parseFloat(selectedService.rate).toFixed(4) : '0.00'}</span>
+                <span className="text-sm text-muted-foreground">Rate per 1,000:</span>
+                <span className="font-medium">
+                  ${selectedService ? parseFloat(selectedService.rate).toFixed(4) : '0.0000'}
+                </span>
               </div>
               <div className="flex justify-between mb-2">
                 <span className="text-sm text-muted-foreground">Your balance:</span>
-                <span className="font-medium">{wallet ? formatCurrencyByCode(wallet.balance, wallet.currency as CurrencyCode) : '$0.00'}</span>
+                <span className="font-medium">
+                  {wallet ? formatCurrencyByCode(wallet.balance, wallet.currency as CurrencyCode) : '$0.00'}
+                </span>
               </div>
               <Separator className="my-2" />
               <div className="flex justify-between">
                 <span className="font-medium">Total:</span>
-                <span className="font-bold text-emerald-500">{calculatePrice()}</span>
+                <span className="font-bold text-emerald-500">
+                  ${calculatePriceUsd().toFixed(4)}
+                </span>
               </div>
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setOrderDialogOpen(false)}>
-              Cancel
-            </Button>
+            <Button variant="outline" onClick={() => setOrderDialogOpen(false)}>Cancel</Button>
             <Button
               className="bg-emerald-500 hover:bg-emerald-600"
-              onClick={handleSubmitOrder}
+              onClick={() => createOrderMutation.mutateAsync().catch(() => {})}
               disabled={createOrderMutation.isPending}
             >
               {createOrderMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Processing...
-                </>
+                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>
               ) : (
                 'Place Order'
               )}
@@ -546,8 +498,4 @@ export default function OrdersPage() {
       </Dialog>
     </motion.div>
   )
-}
-
-function Separator({ className }: { className?: string }) {
-  return <div className={`h-px bg-border ${className || ''}`} />
 }
