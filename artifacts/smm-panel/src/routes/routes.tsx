@@ -40,7 +40,7 @@ const LoadingFallback = () => (
   </div>
 )
 
-const withSuspense = (Component: React.LazyExoticComponent<() => JSX.Element>) => (
+const withSuspense = (Component: React.LazyExoticComponent<() => React.JSX.Element | null>) => (
   <Suspense fallback={<LoadingFallback />}>
     <Component />
   </Suspense>

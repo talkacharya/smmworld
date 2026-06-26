@@ -7,4 +7,10 @@ export * from './referral.service'
 export * from './dashboard.service'
 export * from './exchange-rate.service'
 export * from './smm-api.service'
-export * from './orders.service'
+export {
+  type CreateOrderData,
+  type OrderStatusType,
+  getUserOrders,
+  getOrderById,
+  getOrderStats,
+} from './orders.service'

@@ -108,7 +108,7 @@ router.get("/overview", requireAdmin, async (req, res) => {
 
     const totalUsers =
       userListResult.status === "fulfilled"
-        ? userListResult.value.data?.total || 0
+        ? (userListResult.value.data as { total?: number } | undefined)?.total || 0
         : 0;
 
     const ordersToday =
@@ -413,9 +413,8 @@ router.post("/users/:id/wallet/adjust", requireAdmin, async (req, res) => {
     .eq("user_id", id)
     .single();
 
-  let currentWallet = wallet;
+  let currentWallet: { id: string; balance: number; currency: string };
   if (error || !wallet) {
-    // Create wallet if it doesn't exist
     const { data: newWallet, error: createErr } = await supabaseAdmin
       .from("wallets")
       .insert({ user_id: id, balance: 0, currency: "USD" })
@@ -427,6 +426,8 @@ router.post("/users/:id/wallet/adjust", requireAdmin, async (req, res) => {
       return;
     }
     currentWallet = newWallet;
+  } else {
+    currentWallet = wallet;
   }
   const newBalance =
     type === "credit"

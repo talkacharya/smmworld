@@ -49,6 +49,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
+        Relationships: []
       }
       wallets: {
         Row: {
@@ -75,6 +76,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
+        Relationships: []
       }
       wallet_transactions: {
         Row: {
@@ -110,6 +112,7 @@ export interface Database {
           balance_after?: number
           created_at?: string
         }
+        Relationships: []
       }
       orders: {
         Row: {
@@ -175,6 +178,7 @@ export interface Database {
           updated_at?: string
           completed_at?: string | null
         }
+        Relationships: []
       }
       notifications: {
         Row: {
@@ -207,6 +211,7 @@ export interface Database {
           action_url?: string | null
           created_at?: string
         }
+        Relationships: []
       }
       user_settings: {
         Row: {
@@ -254,6 +259,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
+        Relationships: []
       }
       exchange_rates: {
         Row: {
@@ -280,6 +286,7 @@ export interface Database {
           source?: string
           updated_at?: string
         }
+        Relationships: []
       }
       announcements: {
         Row: {
@@ -318,6 +325,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
+        Relationships: []
       }
       audit_logs: {
         Row: {
@@ -356,6 +364,7 @@ export interface Database {
           user_agent?: string | null
           created_at?: string
         }
+        Relationships: []
       }
     }
     Enums: {
@@ -364,6 +373,8 @@ export interface Database {
       theme: 'light' | 'dark' | 'system'
       order_status: 'pending' | 'processing' | 'in_progress' | 'completed' | 'partial' | 'cancelled' | 'refunded'
     }
+    Views: {}
+    Functions: {}
   }
 }
 

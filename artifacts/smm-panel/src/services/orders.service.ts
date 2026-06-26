@@ -58,6 +58,10 @@ export async function createOrder(
       .eq('id', result.orderId)
       .single()
 
+    if (!order) {
+      return { success: false, error: 'Order created but not found in DB' }
+    }
+
     return { success: true, order: order as Order }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown error'
