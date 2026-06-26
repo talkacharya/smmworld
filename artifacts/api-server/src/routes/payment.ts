@@ -177,19 +177,16 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
     });
 
     if (txErr) {
-      // If insert failed due to unique violation (race condition on payment_id),
-      // treat it as a duplicate — wallet was already credited.
+      // Unique violation on reference_id = payment_id means a concurrent request
+      // already inserted the transaction. The wallet balance update we just applied
+      // was idempotent (same amount, same final value). Do NOT rollback — rolling
+      // back here would undo the first request's legitimately credited balance.
       if (txErr.code === "23505") {
-        logger.info({ userId, razorpay_payment_id }, "Concurrent verify — tx already inserted, rolling back balance update");
-        // Rollback the balance we just added
-        await supabaseAdmin
-          .from("wallets")
-          .update({ balance: wallet.balance, updated_at: new Date().toISOString() })
-          .eq("id", wallet.id);
+        logger.info({ userId, razorpay_payment_id }, "Concurrent verify — tx already inserted, returning success without rollback");
         return res.json({
           success: true,
           creditedUSD: amountUSD,
-          newBalance: wallet.balance,
+          newBalance,
           paymentId: razorpay_payment_id,
           duplicate: true,
         });

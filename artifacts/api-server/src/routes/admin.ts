@@ -261,6 +261,12 @@ router.post("/orders/:id/cancel", requireAdmin, async (req, res) => {
     return;
   }
 
+  // Guard: already in a terminal state — nothing to do
+  if (["cancelled", "refunded", "completed", "partial"].includes(order.status)) {
+    res.status(400).json({ error: `Order is already ${order.status} and cannot be cancelled` });
+    return;
+  }
+
   if (order.external_order_id) {
     await cancelProviderOrder(order.external_order_id);
   }
@@ -274,28 +280,39 @@ router.post("/orders/:id/cancel", requireAdmin, async (req, res) => {
     })
     .eq("id", id);
 
-  // Refund
+  // Refund — idempotency guard: skip if a refund tx already exists for this order
   if (order.price_usd) {
-    const { data: wallet } = await supabaseAdmin
-      .from("wallets")
-      .select("id, balance")
-      .eq("user_id", order.user_id)
-      .single();
-    if (wallet) {
-      const newBal = wallet.balance + order.price_usd;
-      await supabaseAdmin
+    const { data: existingRefund } = await supabaseAdmin
+      .from("wallet_transactions")
+      .select("id")
+      .eq("reference_id", id)
+      .eq("type", "refund")
+      .limit(1);
+
+    if (!existingRefund || existingRefund.length === 0) {
+      const { data: wallet } = await supabaseAdmin
         .from("wallets")
-        .update({ balance: newBal, updated_at: new Date().toISOString() })
-        .eq("id", wallet.id);
-      await supabaseAdmin.from("wallet_transactions").insert({
-        wallet_id: wallet.id,
-        user_id: order.user_id,
-        type: "refund",
-        amount: order.price_usd,
-        description: "Admin cancelled order refund",
-        reference_id: id,
-        balance_after: newBal,
-      });
+        .select("id, balance")
+        .eq("user_id", order.user_id)
+        .single();
+      if (wallet) {
+        const newBal = wallet.balance + order.price_usd;
+        await supabaseAdmin
+          .from("wallets")
+          .update({ balance: newBal, updated_at: new Date().toISOString() })
+          .eq("id", wallet.id);
+        await supabaseAdmin.from("wallet_transactions").insert({
+          wallet_id: wallet.id,
+          user_id: order.user_id,
+          type: "refund",
+          amount: order.price_usd,
+          description: "Admin cancelled order refund",
+          reference_id: id,
+          balance_after: newBal,
+        });
+      }
+    } else {
+      logger.info({ orderId: id }, "Admin cancel: refund already exists, skipping");
     }
   }
 
@@ -396,6 +413,7 @@ router.post("/users/:id/wallet/adjust", requireAdmin, async (req, res) => {
     .eq("user_id", id)
     .single();
 
+  let currentWallet = wallet;
   if (error || !wallet) {
     // Create wallet if it doesn't exist
     const { data: newWallet, error: createErr } = await supabaseAdmin
@@ -408,9 +426,8 @@ router.post("/users/:id/wallet/adjust", requireAdmin, async (req, res) => {
       res.status(404).json({ error: "Wallet not found and could not be created" });
       return;
     }
+    currentWallet = newWallet;
   }
-
-  const currentWallet = wallet || { id: null, balance: 0, currency: "USD" };
   const newBalance =
     type === "credit"
       ? currentWallet.balance + amount

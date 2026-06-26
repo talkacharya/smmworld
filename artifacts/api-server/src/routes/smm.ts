@@ -2,6 +2,7 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { requireAuth } from "../lib/auth";
+import { requireAdmin } from "../lib/adminAuth";
 import { supabaseAdmin } from "../lib/supabaseAdmin";
 import { logger } from "../lib/logger";
 import {
@@ -43,7 +44,7 @@ router.get("/services", generalLimiter, async (req, res) => {
 
 // ── GET /api/smm/balance ─────────────────────────────────────────────────────
 // Admin-only provider balance (not user wallet)
-router.get("/balance", requireAuth, generalLimiter, async (req, res) => {
+router.get("/balance", requireAdmin, generalLimiter, async (req, res) => {
   try {
     const balance = await fetchBalance();
     res.json(balance);
