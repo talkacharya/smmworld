@@ -15,6 +15,7 @@ import {
   BarChart3,
   Users,
   Zap,
+  Megaphone,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { ROUTES, APP_NAME } from '@/lib/constants'
@@ -34,6 +35,7 @@ const adminNavigation = [
   { name: 'Overview', href: ROUTES.ADMIN, icon: BarChart3 },
   { name: 'All Orders', href: ROUTES.ADMIN_ORDERS, icon: Receipt },
   { name: 'Users', href: ROUTES.ADMIN_USERS, icon: Users },
+  { name: 'Announcements', href: ROUTES.ADMIN_ANNOUNCEMENTS, icon: Megaphone },
 ]
 
 export default function Sidebar() {

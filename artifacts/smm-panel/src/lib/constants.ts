@@ -19,6 +19,7 @@ export const ROUTES = {
   ADMIN: '/admin',
   ADMIN_ORDERS: '/admin/orders',
   ADMIN_USERS: '/admin/users',
+  ADMIN_ANNOUNCEMENTS: '/admin/announcements',
 } as const
 
 export const QUERY_KEYS = {

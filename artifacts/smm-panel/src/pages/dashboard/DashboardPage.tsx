@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   Wallet,
   TrendingUp,
@@ -10,6 +11,12 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Plus,
+  X,
+  Info,
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
+  Megaphone,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { getDashboardStats, getBalanceHistory, getMonthlySpending } from '@/services/dashboard.service'
@@ -39,9 +46,34 @@ const item = {
   show: { opacity: 1, y: 0 },
 }
 
+const announcementTypeConfig = {
+  info: { icon: Info, border: 'border-blue-500/20', bg: 'from-blue-500/10 via-blue-500/5', icon_bg: 'bg-blue-500/20', icon_color: 'text-blue-500' },
+  warning: { icon: AlertTriangle, border: 'border-amber-500/20', bg: 'from-amber-500/10 via-amber-500/5', icon_bg: 'bg-amber-500/20', icon_color: 'text-amber-500' },
+  success: { icon: CheckCircle, border: 'border-emerald-500/20', bg: 'from-emerald-500/10 via-emerald-500/5', icon_bg: 'bg-emerald-500/20', icon_color: 'text-emerald-500' },
+  error: { icon: XCircle, border: 'border-red-500/20', bg: 'from-red-500/10 via-red-500/5', icon_bg: 'bg-red-500/20', icon_color: 'text-red-500' },
+  announcement: { icon: Megaphone, border: 'border-purple-500/20', bg: 'from-purple-500/10 via-purple-500/5', icon_bg: 'bg-purple-500/20', icon_color: 'text-purple-500' },
+}
+
 export default function DashboardPage() {
   const { user, profile } = useAuth()
   const firstName = profile?.first_name || 'User'
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => {
+    try {
+      const stored = sessionStorage.getItem('smmhub-dismissed-announcements')
+      return new Set(stored ? JSON.parse(stored) : [])
+    } catch {
+      return new Set()
+    }
+  })
+
+  const dismissAnnouncement = (id: string) => {
+    setDismissedIds((prev) => {
+      const next = new Set(prev)
+      next.add(id)
+      try { sessionStorage.setItem('smmhub-dismissed-announcements', JSON.stringify([...next])) } catch {}
+      return next
+    })
+  }
 
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['dashboard-stats'],
@@ -129,29 +161,44 @@ export default function DashboardPage() {
         </div>
       </motion.div>
 
-      {announcements && announcements.length > 0 && (
-        <motion.div variants={item}>
-          {announcements.slice(0, 1).map((announcement) => (
-            <div
-              key={announcement.id}
-              className="rounded-xl bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent border border-emerald-500/20 p-4 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                  <Bell className="h-5 w-5 text-emerald-500" />
+      <AnimatePresence mode="popLayout">
+        {announcements
+          ?.filter((a) => !dismissedIds.has(a.id))
+          .map((announcement) => {
+            const cfg = announcementTypeConfig[announcement.type as keyof typeof announcementTypeConfig] ?? announcementTypeConfig.info
+            const Icon = cfg.icon
+            return (
+              <motion.div
+                key={announcement.id}
+                variants={item}
+                layout
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <div className={`rounded-xl bg-gradient-to-r ${cfg.bg} to-transparent border ${cfg.border} p-4 flex items-center justify-between gap-3`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`h-10 w-10 rounded-lg ${cfg.icon_bg} flex items-center justify-center flex-shrink-0`}>
+                      <Icon className={`h-5 w-5 ${cfg.icon_color}`} />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-foreground">{announcement.title}</p>
+                      <p className="text-sm text-muted-foreground line-clamp-2">{announcement.content}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => dismissAnnouncement(announcement.id)}
+                    className="flex-shrink-0 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-black/10 transition-colors"
+                    aria-label="Dismiss"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
-                <div>
-                  <p className="font-medium text-foreground">{announcement.title}</p>
-                  <p className="text-sm text-muted-foreground line-clamp-1">{announcement.content}</p>
-                </div>
-              </div>
-              <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-500">
-                New
-              </Badge>
-            </div>
-          ))}
-        </motion.div>
-      )}
+              </motion.div>
+            )
+          })}
+      </AnimatePresence>
 
       <motion.div variants={item} className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat) => (

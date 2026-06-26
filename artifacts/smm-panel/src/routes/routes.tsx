@@ -32,6 +32,7 @@ const SettingsPage = lazy(() => import('@/pages/settings/SettingsPage'))
 const AdminOverviewPage = lazy(() => import('@/pages/admin/AdminOverviewPage'))
 const AdminOrdersPage = lazy(() => import('@/pages/admin/AdminOrdersPage'))
 const AdminUsersPage = lazy(() => import('@/pages/admin/AdminUsersPage'))
+const AdminAnnouncementsPage = lazy(() => import('@/pages/admin/AdminAnnouncementsPage'))
 
 const LoadingFallback = () => (
   <div className="min-h-screen flex items-center justify-center bg-background">
@@ -87,6 +88,7 @@ export const router = createBrowserRouter([
       { path: 'admin', element: withSuspense(AdminOverviewPage) },
       { path: 'admin/orders', element: withSuspense(AdminOrdersPage) },
       { path: 'admin/users', element: withSuspense(AdminUsersPage) },
+      { path: 'admin/announcements', element: withSuspense(AdminAnnouncementsPage) },
     ],
   },
 ])
