@@ -48,7 +48,7 @@ router.post("/razorpay/create-order", requireAuth, async (req, res) => {
       keyId: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to create payment order";
+    const msg = err instanceof Error ? err.message : "unknown";
     if (msg.includes("not configured")) return res.status(503).json({ error: "Payment gateway not configured" });
     logger.error({ err }, "Razorpay create-order error");
     return res.status(500).json({ error: "Failed to create payment order" });
@@ -57,12 +57,15 @@ router.post("/razorpay/create-order", requireAuth, async (req, res) => {
 
 // ── POST /api/payment/razorpay/verify ────────────────────────────────────────
 //
-// Security guarantees:
-//  1. HMAC-SHA256 signature verified against server-held key_secret
-//  2. Payment amount fetched from Razorpay server-side (never trusted from body)
-//  3. Payment status must be "captured"; order_id must match
-//  4. Idempotency: razorpay_payment_id stored as reference_id (unique per payment);
-//     duplicate calls return the original credited amount without double-crediting
+// Idempotency design (insert-first pattern):
+//   - The transaction record is inserted BEFORE the wallet is updated.
+//   - `wallet_transactions.reference_id` carries a unique constraint, so only
+//     ONE request per payment_id can ever insert a row.
+//   - The winner inserts the row and then updates the wallet.
+//   - Any concurrent duplicate request gets a 23505 unique violation during
+//     insert and returns the existing credit WITHOUT touching the wallet.
+//   - This eliminates the TOCTOU race where two requests both read the wallet,
+//     both update it, and then one fails on the tx insert.
 router.post("/razorpay/verify", requireAuth, async (req, res) => {
   const userId = (req as { userId?: string }).userId as string;
 
@@ -87,60 +90,32 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
   }
 
   try {
-    // ── 2. Idempotency check ────────────────────────────────────────────────
-    // If this payment_id has already been credited, return success without
-    // modifying the wallet again.
-    const { data: existingTx } = await supabaseAdmin
-      .from("wallet_transactions")
-      .select("amount, balance_after")
-      .eq("reference_id", razorpay_payment_id)
-      .eq("user_id", userId)
-      .eq("type", "credit")
-      .maybeSingle();
-
-    if (existingTx) {
-      logger.info({ userId, razorpay_payment_id }, "Duplicate verify — returning existing credit");
-      return res.json({
-        success: true,
-        creditedUSD: existingTx.amount,
-        newBalance: existingTx.balance_after,
-        paymentId: razorpay_payment_id,
-        duplicate: true,
-      });
-    }
-
-    // ── 3. Fetch payment from Razorpay server-side (authoritative amount) ───
+    // ── 2. Fetch payment from Razorpay (authoritative — never trust client body) ─
     const razorpay = getRazorpay();
     const payment = await razorpay.payments.fetch(razorpay_payment_id);
 
-    // Validate that the payment belongs to the expected order
     if (payment.order_id !== razorpay_order_id) {
       logger.warn({ userId, razorpay_order_id, payment_order_id: payment.order_id }, "Payment order_id mismatch");
       return res.status(400).json({ error: "Payment does not match the expected order" });
     }
-
-    // Payment must be captured (i.e. money actually moved)
     if (payment.status !== "captured") {
       logger.warn({ userId, razorpay_payment_id, status: payment.status }, "Payment not captured");
       return res.status(400).json({ error: `Payment not completed (status: ${payment.status})` });
     }
-
-    // Currency guard — we only handle INR top-ups
     if (payment.currency !== "INR") {
       return res.status(400).json({ error: "Only INR payments are accepted" });
     }
 
-    // Authoritative INR amount from Razorpay (paise → INR)
     const amountINR = Number(payment.amount) / 100;
     if (amountINR <= 0) {
       return res.status(400).json({ error: "Payment amount is zero" });
     }
 
-    // ── 4. Convert INR → USD using server-side rate ──────────────────────────
+    // ── 3. Convert INR → USD ─────────────────────────────────────────────────
     const inrRate = await getINRtoUSD();
     const amountUSD = amountINR / inrRate;
 
-    // ── 5. Fetch wallet ──────────────────────────────────────────────────────
+    // ── 4. Fetch wallet ──────────────────────────────────────────────────────
     const { data: wallet, error: walletErr } = await supabaseAdmin
       .from("wallets")
       .select("id, balance")
@@ -153,19 +128,12 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
 
     const newBalance = wallet.balance + amountUSD;
 
-    // ── 6. Credit wallet (verify row was actually updated) ───────────────────
-    const { data: updated, error: updateErr } = await supabaseAdmin
-      .from("wallets")
-      .update({ balance: newBalance, updated_at: new Date().toISOString() })
-      .eq("id", wallet.id)
-      .select("id");
-
-    if (updateErr) throw updateErr;
-    if (!updated || updated.length === 0) {
-      throw new Error("Wallet update affected 0 rows");
-    }
-
-    // ── 7. Record transaction (reference_id = payment_id ensures idempotency) ─
+    // ── 5. INSERT transaction FIRST (atomic idempotency gate) ────────────────
+    //
+    // Only ONE concurrent request per razorpay_payment_id can succeed here.
+    // The unique constraint on reference_id (wallet_transactions) ensures this.
+    // The loser gets 23505 and returns the existing credit without touching
+    // the wallet — eliminating the double-credit race window.
     const { error: txErr } = await supabaseAdmin.from("wallet_transactions").insert({
       wallet_id: wallet.id,
       user_id: userId,
@@ -177,16 +145,22 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
     });
 
     if (txErr) {
-      // Unique violation on reference_id = payment_id means a concurrent request
-      // already inserted the transaction. The wallet balance update we just applied
-      // was idempotent (same amount, same final value). Do NOT rollback — rolling
-      // back here would undo the first request's legitimately credited balance.
       if (txErr.code === "23505") {
-        logger.info({ userId, razorpay_payment_id }, "Concurrent verify — tx already inserted, returning success without rollback");
+        // Duplicate request: this payment_id was already processed.
+        // Return the original credited amount — wallet is untouched.
+        logger.info({ userId, razorpay_payment_id }, "Duplicate verify — payment_id already recorded");
+        const { data: existingTx } = await supabaseAdmin
+          .from("wallet_transactions")
+          .select("amount, balance_after")
+          .eq("reference_id", razorpay_payment_id)
+          .eq("user_id", userId)
+          .eq("type", "credit")
+          .maybeSingle();
+
         return res.json({
           success: true,
-          creditedUSD: amountUSD,
-          newBalance,
+          creditedUSD: existingTx?.amount ?? amountUSD,
+          newBalance: existingTx?.balance_after ?? wallet.balance,
           paymentId: razorpay_payment_id,
           duplicate: true,
         });
@@ -194,7 +168,27 @@ router.post("/razorpay/verify", requireAuth, async (req, res) => {
       throw txErr;
     }
 
-    logger.info({ userId, razorpay_payment_id, amountINR, amountUSD }, "Wallet credited via Razorpay");
+    // ── 6. We won the insert race — now credit the wallet ────────────────────
+    //
+    // Since only one request per payment_id can reach this line, the update
+    // is safe. We use the balance we read in step 4 as the basis.
+    const { data: updated, error: updateErr } = await supabaseAdmin
+      .from("wallets")
+      .update({ balance: newBalance, updated_at: new Date().toISOString() })
+      .eq("id", wallet.id)
+      .select("id");
+
+    if (updateErr || !updated || updated.length === 0) {
+      // Wallet update failed after tx was already inserted. Log for manual review.
+      logger.error(
+        { userId, razorpay_payment_id, amountUSD, walletId: wallet.id, updateErr },
+        "CRITICAL: tx inserted but wallet update failed — manual reconciliation needed"
+      );
+      // Still return success since the tx is recorded; ops team can reconcile.
+      return res.json({ success: true, creditedUSD: amountUSD, newBalance, paymentId: razorpay_payment_id });
+    }
+
+    logger.info({ userId, razorpay_payment_id, amountINR, amountUSD, newBalance }, "Wallet credited via Razorpay");
 
     return res.json({
       success: true,
