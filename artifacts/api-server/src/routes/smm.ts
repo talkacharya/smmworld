@@ -93,14 +93,16 @@ router.post("/order", requireAuth, orderLimiter, async (req, res) => {
   }
 
   // 3. Deduct balance atomically (optimistic — before provider call)
+  // Use .select() so we can detect 0-row updates (balance changed under us).
   const newBalance = wallet.balance - priceUsd;
-  const { error: deductErr } = await supabaseAdmin
+  const { data: deducted, error: deductErr } = await supabaseAdmin
     .from("wallets")
     .update({ balance: newBalance, updated_at: new Date().toISOString() })
     .eq("id", wallet.id)
-    .eq("balance", wallet.balance); // optimistic concurrency check
+    .eq("balance", wallet.balance) // optimistic concurrency: only update if balance unchanged
+    .select("id");
 
-  if (deductErr) {
+  if (deductErr || !deducted || deducted.length === 0) {
     res.status(409).json({ error: "Balance update conflict, please retry" });
     return;
   }
